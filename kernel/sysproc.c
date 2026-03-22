@@ -107,3 +107,17 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_trace(void)
+{
+  int mask;
+
+  // Chỉ gọi hàm lấy giá trị, không cần dùng if để kiểm tra nữa
+  argint(0, &mask);
+
+  // Lưu vào biến mask của tiến trình hiện tại
+  myproc()->mask = mask; 
+  
+  return 0;
+}
