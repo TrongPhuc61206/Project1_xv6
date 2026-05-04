@@ -1,0 +1,138 @@
+diff --git a/kernel/file.h b/kernel/file.h
+index b076d1d..5c4eb3a 100644
+--- a/kernel/file.h
++++ b/kernel/file.h
+@@ -26,7 +26,7 @@ struct inode {
+   short minor;
+   short nlink;
+   uint size;
+-  uint addrs[NDIRECT+1];
++  uint addrs[NDIRECT+2];
+ };
+ 
+ // map major device number to device functions.
+diff --git a/kernel/fs.c b/kernel/fs.c
+index c6bab15..da5e6c8 100644
+--- a/kernel/fs.c
++++ b/kernel/fs.c
+@@ -385,6 +385,7 @@ bmap(struct inode *ip, uint bn)
+   uint addr, *a;
+   struct buf *bp;
+ 
++  // === Phần 1: Direct blocks ===
+   if(bn < NDIRECT){
+     if((addr = ip->addrs[bn]) == 0){
+       addr = balloc(ip->dev);
+@@ -396,6 +397,7 @@ bmap(struct inode *ip, uint bn)
+   }
+   bn -= NDIRECT;
+ 
++  // === Phần 2: Singly-indirect blocks ===
+   if(bn < NINDIRECT){
+     // Load indirect block, allocating if necessary.
+     if((addr = ip->addrs[NDIRECT]) == 0){
+@@ -416,7 +418,49 @@ bmap(struct inode *ip, uint bn)
+     brelse(bp);
+     return addr;
+   }
++  
++  // DÒNG NÀY CỰC KỲ QUAN TRỌNG: Trừ đi số lượng block của Singly-indirect
++  bn -= NINDIRECT;
++
++  // === Phần 3: Doubly-indirect blocks ===
++  if(bn < NINDIRECT * NINDIRECT){
++    if((addr = ip->addrs[NDIRECT+1]) == 0){
++      addr = balloc(ip->dev);
++      if(addr == 0) return 0;
++      ip->addrs[NDIRECT+1] = addr;
++    }
++    bp = bread(ip->dev, addr);
++    a = (uint*)bp->data;
++
++    int indirect_idx = bn / NINDIRECT;
++    if((addr = a[indirect_idx]) == 0){
++      addr = balloc(ip->dev);
++      if(addr){
++        a[indirect_idx] = addr;
++        log_write(bp);
++      } else {
++        brelse(bp);
++        return 0;
++      }
++    }
++    brelse(bp);
+ 
++    struct buf *bp2 = bread(ip->dev, addr);
++    uint *a2 = (uint*)bp2->data;
++    int data_idx = bn % NINDIRECT;
++
++    if((addr = a2[data_idx]) == 0){
++      addr = balloc(ip->dev);
++      if(addr){
++        a2[data_idx] = addr;
++        log_write(bp2);
++      }
++    }
++    brelse(bp2);
++    return addr;
++  }
++
++  // Lệnh panic BẮT BUỘC phải nằm dưới cùng của hàm bmap
+   panic("bmap: out of range");
+ }
+ 
+@@ -449,6 +493,29 @@ itrunc(struct inode *ip)
+   }
+ 
+   ip->size = 0;
++  // === Giải phóng doubly-indirect blocks ===
++  if(ip->addrs[NDIRECT+1]){
++    struct buf *bp_double = bread(ip->dev, ip->addrs[NDIRECT+1]);
++    uint *a_double = (uint*)bp_double->data;
++
++    for(int i = 0; i < NINDIRECT; i++){
++      if(a_double[i]){
++        struct buf *bp_single = bread(ip->dev, a_double[i]);
++        uint *a_single = (uint*)bp_single->data;
++        
++        for(int j = 0; j < NINDIRECT; j++){
++          if(a_single[j]){
++            bfree(ip->dev, a_single[j]); 
++          }
++        }
++        brelse(bp_single);
++        bfree(ip->dev, a_double[i]); 
++      }
++    }
++    brelse(bp_double);
++    bfree(ip->dev, ip->addrs[NDIRECT+1]); 
++    ip->addrs[NDIRECT+1] = 0;
++  }
+   iupdate(ip);
+ }
+ 
+diff --git a/kernel/fs.h b/kernel/fs.h
+index 139dcc9..78c109d 100644
+--- a/kernel/fs.h
++++ b/kernel/fs.h
+@@ -24,9 +24,9 @@ struct superblock {
+ 
+ #define FSMAGIC 0x10203040
+ 
+-#define NDIRECT 12
++#define NDIRECT 11
+ #define NINDIRECT (BSIZE / sizeof(uint))
+-#define MAXFILE (NDIRECT + NINDIRECT)
++#define MAXFILE (NDIRECT + NINDIRECT + NINDIRECT * NINDIRECT)
+ 
+ // On-disk inode structure
+ struct dinode {
+@@ -35,7 +35,7 @@ struct dinode {
+   short minor;          // Minor device number (T_DEVICE only)
+   short nlink;          // Number of links to inode in file system
+   uint size;            // Size of file (bytes)
+-  uint addrs[NDIRECT+1];   // Data block addresses
++  uint addrs[NDIRECT+2];   // Data block addresses
+ };
+ 
+ // Inodes per block.
