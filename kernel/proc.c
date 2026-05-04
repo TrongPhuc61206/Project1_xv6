@@ -132,6 +132,16 @@ found:
     return 0;
   }
 
+  // Allocate a page for usyscall
+  if((p->usyscall = (struct usyscall *)kalloc()) == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // Initialize pid value in this memory
+  p->usyscall->pid = p->pid;
+  
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
